@@ -50,9 +50,6 @@ Your privacy policy is now at:
 https://nithinn11.github.io/whoopstatus/privacy.html
 ```
 
-Replace `REPLACE_WITH_YOUR_EMAIL` in [`privacy.html`](privacy.html) with a real
-contact address before you submit it to WHOOP.
-
 ### 2. Create a WHOOP app
 
 At [developer.whoop.com](https://developer.whoop.com), create an app and add
