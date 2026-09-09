@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — WHOOP Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
+<style>
+  :root{--bg:#0a0c10;--panel:#12161d;--line:#232a35;--fg:#e8edf4;--muted:#8b95a5;--dim:#5b6675;--teal:#2dd4bf}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:720px;margin:0 auto;padding:44px 22px 80px}
+  h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 34px}
+  h2{font-size:16px;font-weight:620;margin:34px 0 8px;letter-spacing:-.01em}
+  p,li{color:#cbd4e1}
+  ul{padding-left:20px}
+  li{margin:5px 0}
+  a{color:var(--teal);text-decoration:none;border-bottom:1px solid rgba(45,212,191,.35)}
+  a:hover{border-color:var(--teal)}
+  code{background:var(--panel);border:1px solid var(--line);padding:1.5px 6px;
+    border-radius:4px;font-size:13.5px;color:var(--fg)}
+  .callout{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--teal);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .callout p{margin:0;font-size:14.5px}
+  footer{margin-top:46px;padding-top:20px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Privacy Policy</h1>
+  <p class="sub">WHOOP Dashboard &middot; last updated 9 September 2026</p>
+
+  <div class="callout">
+    <p>This is a personal, single-user project. It exists so one person can
+    view their own WHOOP data. It has no accounts, no sign-up, and no users
+    other than its owner.</p>
+  </div>
+
+  <h2>What this application does</h2>
+  <p>WHOOP Dashboard reads the owner's own health data from the official WHOOP
+  API, using OAuth access that the owner granted to themselves, and renders it
+  as charts on a static web page.</p>
+
+  <h2>What data is accessed</h2>
+  <p>Through the WHOOP API, using these scopes:</p>
+  <ul>
+    <li><code>read:profile</code> — basic profile information</li>
+    <li><code>read:recovery</code> — recovery score, heart rate variability, resting heart rate, blood oxygen, skin temperature</li>
+    <li><code>read:cycles</code> — daily strain, average and maximum heart rate, energy expenditure</li>
+    <li><code>read:sleep</code> — sleep duration, stages, performance and efficiency</li>
+    <li><code>read:workout</code> — logged activities with strain and heart rate</li>
+    <li><code>read:body_measurement</code> — height, weight, maximum heart rate</li>
+    <li><code>offline</code> — permission to refresh access without re-authorising each time</li>
+  </ul>
+  <p>Access is read-only. Nothing is ever written back to WHOOP.</p>
+
+  <h2>Where the data is stored</h2>
+  <p>A scheduled GitHub Actions job fetches the data and commits it to this
+  project's GitHub repository as <code>data/whoop.json</code> and
+  <code>data/whoop.csv</code>. The web page reads those files directly in the
+  browser. There is no database, no backend server, and no API of our own.</p>
+
+  <div class="callout">
+    <p><strong>If the repository is public, these data files are public.</strong>
+    Anyone can read them, and every past version remains in the public git
+    history. This is a deliberate trade-off for free hosting on GitHub Pages,
+    and it is the owner's own health data.</p>
+  </div>
+
+  <h2>Credentials</h2>
+  <p>WHOOP OAuth tokens are held as encrypted GitHub Actions secrets, available
+  only to the workflow while it runs. They are never written into the
+  repository, the data files, or the web page. WHOOP rotates the refresh token
+  on each use; the workflow stores the replacement back into the same secret.</p>
+
+  <h2>Who the data is shared with</h2>
+  <p>No one. The data is not sold, transferred, or disclosed to any third
+  party. There is no analytics, no tracking, no advertising, and no cookies.</p>
+  <p>Two service providers are unavoidably involved in serving the page:</p>
+  <ul>
+    <li><strong>GitHub</strong> hosts the repository and serves the site through
+    GitHub Pages, and therefore receives visitors' IP addresses and request
+    logs under
+    <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a>.</li>
+    <li><strong>Cloudflare (cdnjs)</strong> serves the Chart.js charting library
+    to the visitor's browser, and therefore also receives the visitor's IP
+    address and user agent. It receives no health data.</li>
+  </ul>
+
+  <h2>Retention</h2>
+  <p>Data remains in the repository, including its git history, until the owner
+  deletes it. Deleting the repository removes it. Because history is retained,
+  removing a single past value requires rewriting git history rather than
+  simply editing the current file.</p>
+
+  <h2>Revoking access</h2>
+  <p>The owner can revoke this application's access at any time from their
+  WHOOP account settings, or by deleting the application at
+  <a href="https://developer.whoop.com">developer.whoop.com</a>. Revoking stops
+  all future data collection immediately. Data already committed to the
+  repository is removed by deleting those files or the repository.</p>
+
+  <h2>Children</h2>
+  <p>This application is not directed at anyone under 16 and collects data from
+  no one other than its owner.</p>
+
+  <h2>Changes</h2>
+  <p>Any change to this policy will be published on this page with a revised
+  date above. The full revision history is visible in the repository.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about this policy: <a href="mailto:nithinnoob11@gmail.com">nithinnoob11@gmail.com</a></p>
+
+  <footer>
+    <a href="./">&larr; Back to the dashboard</a>
+  </footer>
+</div>
+</body>
+</html>

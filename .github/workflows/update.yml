@@ -1,0 +1,112 @@
+name: Update WHOOP data
+
+on:
+  # Every 30 minutes. This is NOT about chart freshness -- WHOOP expires an
+  # idle refresh token in roughly 3 hours, so a daily cron would find a dead
+  # credential and the dashboard would silently freeze.
+  schedule:
+    - cron: "*/30 * * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Two runs refreshing the same rotating token would invalidate each other.
+concurrency:
+  group: whoop-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch WHOOP data
+        id: fetch
+        # Lets the token-rotation step below run even when the fetch dies.
+        # The job is still failed explicitly at the end.
+        continue-on-error: true
+        env:
+          WHOOP_CLIENT_ID: ${{ secrets.WHOOP_CLIENT_ID }}
+          WHOOP_CLIENT_SECRET: ${{ secrets.WHOOP_CLIENT_SECRET }}
+          WHOOP_REFRESH_TOKEN: ${{ secrets.WHOOP_REFRESH_TOKEN }}
+          WHOOP_TOKEN_OUT: ${{ runner.temp }}/whoop_refresh_token
+        run: python scripts/fetch_whoop.py --days 365
+
+      # THE STEP THAT KEEPS THIS ALIVE.
+      # WHOOP rotates the refresh token on every use and kills the old one.
+      # Without writing the new one back, the very next run authenticates with
+      # a dead credential. Runs on failure too: the script persists the token
+      # immediately after refreshing, before it fetches anything, so a fetch
+      # error must not strand the only working credential on the runner.
+      - name: Persist rotated refresh token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/whoop_refresh_token
+        run: |
+          if [ ! -s "$TOKEN_FILE" ]; then
+            echo "::warning::No rotated token written -- refresh never succeeded."
+            exit 0
+          fi
+          NEW_TOKEN="$(cat "$TOKEN_FILE")"
+          echo "::add-mask::$NEW_TOKEN"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::GH_SECRETS_PAT is not set. The rotated refresh token"
+            echo "::error::cannot be saved, so the next run will fail auth."
+            exit 1
+          fi
+          printf '%s' "$NEW_TOKEN" | gh secret set WHOOP_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
+          echo "Refresh token rotated and stored."
+          rm -f "$TOKEN_FILE"
+
+      - name: Commit refreshed data
+        if: steps.fetch.outcome == 'success'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/whoop.json data/whoop.csv
+          if git diff --staged --quiet; then
+            echo "No change in WHOOP data."
+            exit 0
+          fi
+          git commit -m "chore: update WHOOP data"
+          # Another scheduled run may have landed a commit since checkout.
+          git pull --rebase --autostash origin main
+          git push
+
+      - name: Fail if the fetch failed
+        if: steps.fetch.outcome != 'success'
+        run: |
+          echo "::error::WHOOP fetch failed -- see the 'Fetch WHOOP data' step."
+          echo "The site still deploys, but the data below is stale."
+          exit 1
+
+  deploy:
+    needs: update
+    # Deploy even when the fetch failed, so a dead token never also takes the
+    # site down. The red X on `update` is the signal that data is stale.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: "."
+      - id: deployment
+        uses: actions/deploy-pages@v4
