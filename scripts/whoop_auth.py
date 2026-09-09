@@ -26,6 +26,11 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+# WHOOP sits behind Cloudflare, which rejects urllib's default
+# "Python-urllib/3.x" signature with a 403 (error 1010, browser_signature_banned).
+# Every request must carry a real product User-Agent.
+UA = "whoop-dashboard/1.0"
+
 AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 # Must match a redirect URI registered on your app at developer.whoop.com,
@@ -95,6 +100,7 @@ def post_form(url, fields):
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
+            "User-Agent": UA,
         },
     )
     try:
@@ -102,6 +108,13 @@ def post_form(url, fields):
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:400]
+        if e.code == 403 and "1010" in detail:
+            raise SystemExit(
+                "Token exchange blocked by Cloudflare (error 1010), not by WHOOP.\n"
+                "  The request went out with a User-Agent Cloudflare rejects.\n"
+                "  This should not happen -- UA is set above; check it was not "
+                "stripped."
+            )
         raise SystemExit("Token exchange failed: HTTP %s\n%s" % (e.code, detail))
 
 
