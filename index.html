@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WHOOP Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0c10; --panel:#12161d; --panel-2:#171c25; --line:#232a35;
+    --fg:#e8edf4; --muted:#8b95a5; --dim:#5b6675;
+    --green:#16c47f; --yellow:#f5b73d; --red:#f2545b;
+    --blue:#4a9eff; --purple:#a78bfa; --teal:#2dd4bf;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 64px}
+
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;margin-bottom:24px}
+  h1{font-size:22px;font-weight:650;margin:0;letter-spacing:-.02em}
+  h1 span{color:var(--dim);font-weight:400}
+  .updated{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+
+  .banner{
+    display:none;gap:10px;align-items:flex-start;padding:12px 14px;margin-bottom:20px;
+    border:1px solid rgba(242,84,91,.35);background:rgba(242,84,91,.08);
+    border-radius:10px;font-size:13.5px;color:#ffd7d9;
+  }
+  .banner.show{display:flex}
+  .banner b{color:#fff}
+
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-bottom:26px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .k{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  .tile .v{font-size:29px;font-weight:660;margin-top:5px;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+  .tile .u{font-size:14px;color:var(--dim);font-weight:500;margin-left:2px}
+  .tile .d{font-size:12px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+
+  .ranges{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+  .ranges button{
+    background:var(--panel);color:var(--muted);border:1px solid var(--line);
+    padding:6px 14px;border-radius:20px;font-size:13px;font-weight:550;cursor:pointer;
+    font-family:inherit;transition:.15s;
+  }
+  .ranges button:hover{color:var(--fg);border-color:#374151}
+  .ranges button[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:#04241f}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px 12px;margin-bottom:16px}
+  .card h2{font-size:14px;font-weight:620;margin:0 0 2px;letter-spacing:-.01em}
+  .card p{margin:0 0 12px;color:var(--muted);font-size:12.5px}
+  .chart{position:relative;height:230px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}.chart{height:200px}}
+
+  .tblwrap{overflow-x:auto;margin:0 -4px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;
+     letter-spacing:.05em;padding:0 12px 8px;white-space:nowrap}
+  td{padding:9px 12px;border-top:1px solid var(--line);white-space:nowrap}
+  tbody tr:hover{background:var(--panel-2)}
+  .num{text-align:right}
+
+  footer{margin-top:30px;display:flex;gap:16px;flex-wrap:wrap;color:var(--dim);font-size:13px}
+  footer a{color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line)}
+  footer a:hover{color:var(--teal);border-color:var(--teal)}
+  .err{padding:40px 4px;color:var(--muted)}
+  .err code{background:var(--panel-2);padding:2px 6px;border-radius:4px;color:var(--fg);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>WHOOP <span>Dashboard</span></h1>
+    <div class="updated" id="updated"></div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+  <div id="app" hidden>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="ranges" id="ranges">
+      <button data-days="30" aria-pressed="true">30d</button>
+      <button data-days="90" aria-pressed="false">90d</button>
+      <button data-days="180" aria-pressed="false">6m</button>
+      <button data-days="0" aria-pressed="false">All</button>
+    </div>
+
+    <div class="card">
+      <h2>Recovery</h2>
+      <p>Green at 67% and up, yellow 34&ndash;66%, red below 34%.</p>
+      <div class="chart"><canvas id="cRecovery"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>Day strain</h2>
+      <p>Cardiovascular load on WHOOP's 0&ndash;21 logarithmic scale.</p>
+      <div class="chart"><canvas id="cStrain"></canvas></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>HRV &amp; resting heart rate</h2>
+        <p>Rising HRV with falling RHR is the shape you want.</p>
+        <div class="chart"><canvas id="cHrv"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Sleep</h2>
+        <p>Hours asleep against sleep performance.</p>
+        <div class="chart"><canvas id="cSleep"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recent workouts</h2>
+      <p id="woCount"></p>
+      <div class="tblwrap"><table>
+        <thead><tr>
+          <th>Date</th><th>Activity</th><th class="num">Strain</th>
+          <th class="num">Min</th><th class="num">Avg HR</th>
+          <th class="num">Max HR</th><th class="num">Cal</th>
+        </tr></thead>
+        <tbody id="woBody"></tbody>
+      </table></div>
+    </div>
+
+    <footer>
+      <a href="data/whoop.csv" download>Download CSV</a>
+      <a href="data/whoop.json" download>Download JSON</a>
+      <span id="range"></span>
+    </footer>
+  </div>
+
+  <div class="err" id="err" hidden></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const CSS = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const num = v => (v === null || v === undefined || v === "") ? null : +v;
+const fmt = (v, d = 0) => v === null ? "—" : v.toFixed(d);
+
+let DATA = null, DAYS = 30;
+const charts = {};
+
+const recColor = v => v === null ? CSS("--dim")
+  : v >= 67 ? CSS("--green") : v >= 34 ? CSS("--yellow") : CSS("--red");
+
+// ---- chart defaults ------------------------------------------------------
+Chart.defaults.color = CSS("--muted");
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+Chart.defaults.font.size = 11;
+Chart.defaults.animation.duration = 550;
+Chart.defaults.plugins.legend.labels.boxWidth = 10;
+Chart.defaults.plugins.legend.labels.boxHeight = 10;
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+
+const AXIS = { grid: { color: CSS("--line"), drawTicks: false }, border: { display: false } };
+const baseOpts = extra => Object.assign({
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "index", intersect: false },
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      backgroundColor: "#0a0c10", borderColor: CSS("--line"), borderWidth: 1,
+      titleColor: CSS("--fg"), bodyColor: CSS("--fg"), padding: 10,
+      cornerRadius: 8, displayColors: true, boxPadding: 4
+    }
+  },
+  scales: {
+    x: Object.assign({ ticks: { maxRotation: 0, autoSkipPadding: 22 } }, AXIS)
+  }
+}, extra);
+
+// ---- rendering -----------------------------------------------------------
+function windowed() {
+  const s = DATA.series;
+  return DAYS > 0 ? s.slice(-DAYS) : s;
+}
+
+const shortDate = iso => {
+  const [, m, d] = iso.split("-");
+  return +d + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m - 1];
+};
+
+function mean(rows, key) {
+  const v = rows.map(r => num(r[key])).filter(x => x !== null);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+function renderTiles(rows) {
+  // Latest non-empty value per metric -- last night's recovery may not be
+  // scored yet while strain for the day already is.
+  const latest = key => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const v = num(rows[i][key]);
+      if (v !== null) return { v, date: rows[i].date };
+    }
+    return { v: null, date: null };
+  };
+  const baseline = rows.slice(-30);
+  const tiles = [
+    ["Recovery", latest("recovery"), 0, "%", mean(baseline, "recovery")],
+    ["Day strain", latest("strain"), 1, "", mean(baseline, "strain")],
+    ["HRV", latest("hrv"), 0, "ms", mean(baseline, "hrv")],
+    ["Resting HR", latest("rhr"), 0, "bpm", mean(baseline, "rhr")],
+    ["Sleep", latest("sleep_hours"), 1, "h", mean(baseline, "sleep_hours")],
+  ];
+  $("tiles").innerHTML = tiles.map(([label, cur, dp, unit, avg]) => {
+    const color = label === "Recovery" ? recColor(cur.v) : CSS("--fg");
+    const delta = (cur.v !== null && avg !== null)
+      ? (cur.v - avg >= 0 ? "+" : "−") + Math.abs(cur.v - avg).toFixed(dp) + " vs 30d avg"
+      : "—";
+    return `<div class="tile"><div class="k">${label}</div>
+      <div class="v" style="color:${color}">${fmt(cur.v, dp)}<span class="u">${unit}</span></div>
+      <div class="d">${delta}</div></div>`;
+  }).join("");
+}
+
+function draw(id, config) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart($(id), config);
+}
+
+function renderCharts(rows) {
+  const labels = rows.map(r => shortDate(r.date));
+  const col = rows.map(r => num(r.recovery));
+
+  draw("cRecovery", {
+    type: "bar",
+    data: { labels, datasets: [{
+      label: "Recovery %", data: col,
+      backgroundColor: col.map(recColor), borderRadius: 3, borderSkipped: false
+    }] },
+    options: baseOpts({ scales: {
+      x: Object.assign({ ticks: { maxRotation: 0, autoSkipPadding: 22 } }, AXIS),
+      y: Object.assign({ min: 0, max: 100, ticks: { stepSize: 25, callback: v => v + "%" } }, AXIS)
+    } })
+  });
+
+  draw("cStrain", {
+    type: "bar",
+    data: { labels, datasets: [{
+      label: "Strain", data: rows.map(r => num(r.strain)),
+      backgroundColor: CSS("--blue"), borderRadius: 3, borderSkipped: false
+    }] },
+    options: baseOpts({ scales: {
+      x: Object.assign({ ticks: { maxRotation: 0, autoSkipPadding: 22 } }, AXIS),
+      y: Object.assign({ min: 0, suggestedMax: 21 }, AXIS)
+    } })
+  });
+
+  draw("cHrv", {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "HRV (ms)", data: rows.map(r => num(r.hrv)), yAxisID: "y",
+        borderColor: CSS("--teal"), backgroundColor: "rgba(45,212,191,.12)",
+        fill: true, tension: .35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, spanGaps: true },
+      { label: "RHR (bpm)", data: rows.map(r => num(r.rhr)), yAxisID: "y1",
+        borderColor: CSS("--purple"), tension: .35, pointRadius: 0,
+        pointHoverRadius: 4, borderWidth: 2, spanGaps: true }
+    ] },
+    options: baseOpts({
+      plugins: { legend: { display: true, position: "bottom" } },
+      scales: {
+        x: Object.assign({ ticks: { maxRotation: 0, autoSkipPadding: 22 } }, AXIS),
+        y:  Object.assign({ position: "left" }, AXIS),
+        y1: { position: "right", grid: { drawOnChartArea: false }, border: { display: false } }
+      }
+    })
+  });
+
+  draw("cSleep", {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "Hours asleep", data: rows.map(r => num(r.sleep_hours)), yAxisID: "y",
+        backgroundColor: CSS("--purple"), borderRadius: 3, borderSkipped: false, order: 2 },
+      { label: "Performance %", data: rows.map(r => num(r.sleep_performance)), yAxisID: "y1",
+        type: "line", borderColor: CSS("--yellow"), tension: .35, pointRadius: 0,
+        pointHoverRadius: 4, borderWidth: 2, spanGaps: true, order: 1 }
+    ] },
+    options: baseOpts({
+      plugins: { legend: { display: true, position: "bottom" } },
+      scales: {
+        x: Object.assign({ ticks: { maxRotation: 0, autoSkipPadding: 22 } }, AXIS),
+        y:  Object.assign({ min: 0, suggestedMax: 10, position: "left" }, AXIS),
+        y1: { min: 0, max: 100, position: "right", grid: { drawOnChartArea: false }, border: { display: false } }
+      }
+    })
+  });
+}
+
+function renderWorkouts(rows) {
+  // Must honour the same window as the charts, or the table shows June
+  // sessions next to a 30-day strain chart.
+  const from = rows.length ? rows[0].date : "0000-00-00";
+  const w = (DATA.workouts || []).filter(x => x.date && x.date >= from);
+  $("woCount").textContent = w.length
+    ? `${w.length} logged session${w.length === 1 ? "" : "s"} in this window, most recent first.`
+    : "No workouts in this window.";
+  const cell = v => v === null || v === undefined ? "—" : v;
+  const title = s => s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  $("woBody").innerHTML = w.slice(0, 25).map(x => `<tr>
+    <td>${x.date || "—"}</td><td>${title(x.sport || "Activity")}</td>
+    <td class="num">${x.strain != null ? x.strain.toFixed(1) : "—"}</td>
+    <td class="num">${cell(x.minutes)}</td><td class="num">${cell(x.avg_hr)}</td>
+    <td class="num">${cell(x.max_hr)}</td><td class="num">${cell(x.calories)}</td>
+  </tr>`).join("");
+}
+
+function renderAll() {
+  const rows = windowed();
+  renderTiles(rows);
+  renderCharts(rows);
+  renderWorkouts(rows);
+  $("range").textContent = rows.length
+    ? `Showing ${rows.length} days (${rows[0].date} → ${rows[rows.length - 1].date})`
+    : "";
+}
+
+// The whole point of the 30-minute workflow is that this banner stays hidden.
+// If the token dies, the Actions run goes red AND the page says so.
+function staleCheck(generatedAt) {
+  const ts = new Date(generatedAt);
+  const hours = (Date.now() - ts) / 36e5;
+  $("updated").textContent = "Updated " + ts.toLocaleString(undefined, {
+    dateStyle: "medium", timeStyle: "short"
+  });
+  if (hours > 6) {
+    $("banner").classList.add("show");
+    $("banner").innerHTML = `<span>⚠️</span><div><b>Data is
+      ${hours < 48 ? Math.round(hours) + " hours" : Math.round(hours / 24) + " days"} old.</b>
+      The updater should run every 30 minutes &mdash; check the Actions tab. The
+      usual cause is an expired WHOOP refresh token; re-run
+      <code>scripts/whoop_auth.py</code> and update the secret.</div>`;
+  }
+}
+
+fetch("data/whoop.json?t=" + Date.now())
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(d => {
+    if (!d.series || !d.series.length) throw new Error("no days in data/whoop.json");
+    DATA = d;
+    staleCheck(d.generated_at);
+    $("app").hidden = false;
+    renderAll();
+    $("ranges").addEventListener("click", e => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      DAYS = +b.dataset.days;
+      [...$("ranges").children].forEach(x => x.setAttribute("aria-pressed", x === b));
+      renderAll();
+    });
+  })
+  .catch(err => {
+    $("err").hidden = false;
+    $("err").innerHTML = `<p>Could not load <code>data/whoop.json</code> &mdash; ${err.message}.</p>
+      <p>If this is a fresh clone, run <code>python3 scripts/fetch_whoop.py</code> first,
+      then serve the folder with <code>python3 -m http.server 8000</code>.
+      Opening the file directly with <code>file://</code> will not work &mdash; the fetch is blocked by CORS.</p>`;
+  });
+</script>
+</body>
+</html>
