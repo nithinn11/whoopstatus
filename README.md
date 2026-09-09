@@ -34,18 +34,42 @@ Three things here exist to prevent that:
 
 ## Setup
 
-### 1. Create a WHOOP app
+The order matters: WHOOP's app form asks for a privacy policy URL, and that
+URL only resolves once your site is live. So publish first, then register.
+
+### 1. Publish the site
+
+Create the GitHub repo, push this code, then **Settings → Pages → Source:
+GitHub Actions**. Run the workflow once from the Actions tab. It will fail at
+the fetch step -- there are no credentials yet -- but the `deploy` job still
+runs, so the site goes live.
+
+Your privacy policy is now at:
+
+```
+https://<username>.github.io/<repo>/privacy.html
+```
+
+Replace `REPLACE_WITH_YOUR_EMAIL` in [`privacy.html`](privacy.html) with a real
+contact address before you submit it to WHOOP.
+
+### 2. Create a WHOOP app
 
 At [developer.whoop.com](https://developer.whoop.com), create an app and add
 this redirect URI **exactly**:
 
 ```
-http://localhost:8080/callback
+http://localhost:1111/callback
 ```
+
+If you registered a different port, set `WHOOP_REDIRECT_URI` when running the
+auth script instead of editing it.
+
+For the **privacy policy URL**, use the Pages link from step 1.
 
 Note the client ID and client secret.
 
-### 2. Get a refresh token
+### 3. Get a refresh token
 
 ```bash
 export WHOOP_CLIENT_ID="..."
@@ -57,7 +81,7 @@ This opens the WHOOP consent screen, catches the redirect locally, and prints
 the three values you need. Run it once; the workflow keeps the token fresh
 from then on.
 
-### 3. Create a fine-grained PAT
+### 4. Create a fine-grained PAT
 
 The workflow has to rewrite its own `WHOOP_REFRESH_TOKEN` secret, and the
 built-in `GITHUB_TOKEN` cannot write secrets. At
@@ -67,7 +91,7 @@ built-in `GITHUB_TOKEN` cannot write secrets. At
 - Repository permissions: **Secrets: Read and write**
 - Expiration: set a calendar reminder to rotate it
 
-### 4. Add the secrets
+### 5. Add the secrets
 
 **Settings → Secrets and variables → Actions**:
 
@@ -76,14 +100,13 @@ built-in `GITHUB_TOKEN` cannot write secrets. At
 | `WHOOP_CLIENT_ID` | from developer.whoop.com |
 | `WHOOP_CLIENT_SECRET` | from developer.whoop.com |
 | `WHOOP_REFRESH_TOKEN` | printed by `whoop_auth.py` (rewritten automatically after this) |
-| `GH_SECRETS_PAT` | the fine-grained PAT from step 3 |
+| `GH_SECRETS_PAT` | the fine-grained PAT from step 4 |
 
-### 5. Turn on Pages
+### 6. Run it
 
-**Settings → Pages → Source: GitHub Actions**.
-
-Then **Actions → Update WHOOP data → Run workflow**. The first run fetches a
-year of history and publishes the site.
+**Actions → Update WHOOP data → Run workflow**. This run fetches a year of
+history, rotates the token, and republishes the site with your data. From here
+the 30-minute schedule takes over.
 
 ## Local development
 

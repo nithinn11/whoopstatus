@@ -9,8 +9,9 @@ Secrets. Run this once (and again only if the token is ever revoked).
     export WHOOP_CLIENT_SECRET=...
     python3 scripts/whoop_auth.py
 
-Requires that http://localhost:8080/callback is registered as a redirect URI
-on your app at developer.whoop.com.
+Requires that the redirect URI below is registered on your app at
+developer.whoop.com, exactly. Default is http://localhost:1111/callback;
+set WHOOP_REDIRECT_URI to override.
 """
 import http.server
 import json
@@ -25,7 +26,12 @@ import webbrowser
 
 AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
-REDIRECT_URI = "http://localhost:8080/callback"
+# Must match a redirect URI registered on your app at developer.whoop.com,
+# character for character. Override with WHOOP_REDIRECT_URI if you registered
+# a different port.
+REDIRECT_URI = os.environ.get(
+    "WHOOP_REDIRECT_URI", "http://localhost:1111/callback"
+)
 
 # `offline` is what makes WHOOP issue a refresh token at all -- without it you
 # get a lone access token that dies in an hour and cannot be renewed.
@@ -47,12 +53,13 @@ PAGE = """<!doctype html><meta charset=utf-8>
 
 result = {}
 done = threading.Event()
+CALLBACK_PATH = "/callback"
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/callback":
+        if parsed.path != CALLBACK_PATH:
             self.send_error(404)
             return
         q = urllib.parse.parse_qs(parsed.query)
@@ -115,10 +122,18 @@ def main():
         }
     )
 
+    parsed_redirect = urllib.parse.urlparse(REDIRECT_URI)
+    port = parsed_redirect.port or 80
+    global CALLBACK_PATH
+    CALLBACK_PATH = parsed_redirect.path or "/callback"
     try:
-        server = http.server.HTTPServer(("127.0.0.1", 8080), Handler)
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
     except OSError as e:
-        raise SystemExit("Cannot bind localhost:8080 (%s). Free the port and retry." % e)
+        raise SystemExit(
+            "Cannot bind localhost:%d (%s).\n"
+            "  Free the port, or set WHOOP_REDIRECT_URI to a port you did "
+            "register." % (port, e)
+        )
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
