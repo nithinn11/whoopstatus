@@ -47,7 +47,7 @@ runs, so the site goes live.
 Your privacy policy is now at:
 
 ```
-https://<username>.github.io/<repo>/privacy.html
+https://nithinn11.github.io/whoopstatus/privacy.html
 ```
 
 Replace `REPLACE_WITH_YOUR_EMAIL` in [`privacy.html`](privacy.html) with a real
@@ -72,13 +72,15 @@ Note the client ID and client secret.
 ### 3. Get a refresh token
 
 ```bash
-export WHOOP_CLIENT_ID="..."
-export WHOOP_CLIENT_SECRET="..."
 python3 scripts/whoop_auth.py
 ```
 
-This opens the WHOOP consent screen, catches the redirect locally, and prints
-the three values you need. Run it once; the workflow keeps the token fresh
+It prompts for your client id and secret **without echoing them**, opens the
+WHOOP consent screen, catches the redirect locally, and writes all three
+values to `.env.local` (chmod 600, gitignored).
+
+Nothing is printed to the terminal on purpose. Open `.env.local` yourself and
+copy each value into GitHub. Run this once; the workflow keeps the token fresh
 from then on.
 
 ### 4. Create a fine-grained PAT
@@ -111,17 +113,36 @@ the 30-minute schedule takes over.
 ## Local development
 
 ```bash
-export WHOOP_CLIENT_ID="..." WHOOP_CLIENT_SECRET="..." WHOOP_REFRESH_TOKEN="..."
-python3 scripts/fetch_whoop.py --days 365
-python3 -m http.server 8000     # then open http://localhost:8000
+python3 scripts/fetch_whoop.py --days 365   # reads .env.local automatically
+python3 -m http.server 8000                 # then open http://localhost:8000
 ```
 
 Serve it over HTTP — opening `index.html` as a `file://` URL fails, because
 the `fetch` of `data/whoop.json` is blocked by CORS.
 
 Careful: running the fetcher locally rotates the token, which invalidates the
-one stored in GitHub. Either accept that the next Actions run will repair it
-from its own copy, or re-run `whoop_auth.py` afterwards.
+copy stored in GitHub. The local run writes the replacement back into
+`.env.local`, so local runs keep working -- but the next Actions run will fail
+auth until you paste the new `WHOOP_REFRESH_TOKEN` from `.env.local` into the
+repository secret. Prefer running the workflow over running the fetcher
+locally once things are live.
+
+## Where credentials live
+
+| | Holds | Notes |
+|---|---|---|
+| GitHub Actions secrets | all three | encrypted, exposed only to the running workflow, never logged |
+| `.env.local` | all three | your machine only, chmod 600, gitignored |
+| Repository / site | none | no credential is ever committed or served |
+
+Two ways this goes wrong, both avoidable:
+
+- **`export`ing secrets into your shell.** They land in your shell history and
+  in the environment of every command you run afterwards. Use `.env.local`;
+  both scripts read it automatically.
+- **Echoing them.** Terminal scrollback gets screen-shared, pasted into issues,
+  and read by anything watching the session. `whoop_auth.py` uses `getpass` and
+  writes to a file rather than printing.
 
 ## Data
 

@@ -5,14 +5,16 @@ Opens the WHOOP consent screen, catches the redirect on localhost, exchanges
 the authorization code, and prints the refresh token you paste into GitHub
 Secrets. Run this once (and again only if the token is ever revoked).
 
-    export WHOOP_CLIENT_ID=...
-    export WHOOP_CLIENT_SECRET=...
     python3 scripts/whoop_auth.py
+
+It prompts for the client id and secret without echoing them, and writes the
+results to .env.local rather than printing them to the terminal.
 
 Requires that the redirect URI below is registered on your app at
 developer.whoop.com, exactly. Default is http://localhost:1111/callback;
 set WHOOP_REDIRECT_URI to override.
 """
+import getpass
 import http.server
 import json
 import os
@@ -103,11 +105,33 @@ def post_form(url, fields):
         raise SystemExit("Token exchange failed: HTTP %s\n%s" % (e.code, detail))
 
 
+def load_env_file(path=".env.local"):
+    """Read KEY=value pairs from .env.local into the environment.
+
+    Lets you keep credentials in one gitignored file instead of exporting them
+    into your shell, where they leak into shell history and into the
+    environment of every command you run afterwards.
+    """
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def main():
-    client_id = os.environ.get("WHOOP_CLIENT_ID") or input("WHOOP_CLIENT_ID: ").strip()
-    client_secret = (
-        os.environ.get("WHOOP_CLIENT_SECRET") or input("WHOOP_CLIENT_SECRET: ").strip()
-    )
+    load_env_file()
+    client_id = os.environ.get("WHOOP_CLIENT_ID")
+    client_secret = os.environ.get("WHOOP_CLIENT_SECRET")
+    # getpass, not input: a typed secret must not land in terminal scrollback.
+    if not client_id:
+        client_id = getpass.getpass("WHOOP_CLIENT_ID (hidden): ").strip()
+    if not client_secret:
+        client_secret = getpass.getpass("WHOOP_CLIENT_SECRET (hidden): ").strip()
     if not client_id or not client_secret:
         raise SystemExit("Both WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET are required.")
 
@@ -170,24 +194,34 @@ def main():
             "on your app at developer.whoop.com, then rerun."
         )
 
-    print("\n" + "=" * 64)
-    print("Success. Add these four values as GitHub Actions secrets:")
-    print("=" * 64)
-    print("\nWHOOP_CLIENT_ID\n  %s" % client_id)
-    print("\nWHOOP_CLIENT_SECRET\n  %s" % client_secret)
-    print("\nWHOOP_REFRESH_TOKEN\n  %s" % refresh)
-    print("\n(access token expires in %ss and is refreshed automatically -- "
-          "no need to store it)" % tokens.get("expires_in", "?"))
-    print("\nSettings -> Secrets and variables -> Actions -> New repository secret")
-    print("=" * 64 + "\n")
+    # Deliberately NOT printed. Terminal output gets scrolled back, screen-shared,
+    # copied into bug reports and read by anything watching the session. The
+    # file is gitignored and owner-read-only.
+    path = ".env.local"
+    with open(path, "w") as f:
+        f.write("# WHOOP credentials. Gitignored -- never commit this file.\n")
+        f.write("WHOOP_CLIENT_ID=%s\n" % client_id)
+        f.write("WHOOP_CLIENT_SECRET=%s\n" % client_secret)
+        f.write("WHOOP_REFRESH_TOKEN=%s\n" % refresh)
+    os.chmod(path, 0o600)
 
-    if os.environ.get("WHOOP_WRITE_ENV") == "1":
-        with open(".env.local", "w") as f:
-            f.write("WHOOP_CLIENT_ID=%s\n" % client_id)
-            f.write("WHOOP_CLIENT_SECRET=%s\n" % client_secret)
-            f.write("WHOOP_REFRESH_TOKEN=%s\n" % refresh)
-        os.chmod(".env.local", 0o600)
-        print("Also wrote .env.local (gitignored, chmod 600).\n")
+    print("\n" + "=" * 68)
+    print("Success. Credentials written to %s (chmod 600, gitignored)."
+          % os.path.abspath(path))
+    print("=" * 68)
+    print("""
+Nothing was printed to this terminal on purpose -- open the file yourself.
+
+Copy each value into GitHub as a repository secret:
+  Settings -> Secrets and variables -> Actions -> New repository secret
+
+  WHOOP_CLIENT_ID
+  WHOOP_CLIENT_SECRET
+  WHOOP_REFRESH_TOKEN
+
+The access token expires in %ss and is refreshed automatically, so it is not
+stored. After the workflow runs once it rewrites WHOOP_REFRESH_TOKEN itself.
+""" % tokens.get("expires_in", "?"))
 
 
 if __name__ == "__main__":

@@ -94,17 +94,38 @@ def refresh_access_token(refresh_token, client_id, client_secret):
 
 
 def persist_refresh_token(token):
-    """Hand the rotated token to the workflow (or a local file) to store."""
+    """Store the rotated token: the workflow's handoff file in CI, .env.local
+    locally. Skipping either one means the *next* run presents a token this
+    run already invalidated."""
     out = os.environ.get("WHOOP_TOKEN_OUT")
-    if not out:
+    if out:
+        with open(out, "w") as f:
+            f.write(token)
+        try:
+            os.chmod(out, 0o600)
+        except OSError:
+            pass
+        log("Wrote rotated refresh token to %s" % out)
         return
-    with open(out, "w") as f:
-        f.write(token)
-    try:
-        os.chmod(out, 0o600)
-    except OSError:
-        pass
-    log("Wrote rotated refresh token to %s" % out)
+
+    if not os.path.exists(".env.local"):
+        log("WARNING: refresh token rotated but there is nowhere to store it. "
+            "The next run will fail unless you update WHOOP_REFRESH_TOKEN.")
+        return
+
+    with open(".env.local") as f:
+        lines = f.readlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith("WHOOP_REFRESH_TOKEN="):
+            lines[i] = "WHOOP_REFRESH_TOKEN=%s\n" % token
+            replaced = True
+    if not replaced:
+        lines.append("WHOOP_REFRESH_TOKEN=%s\n" % token)
+    with open(".env.local", "w") as f:
+        f.writelines(lines)
+    os.chmod(".env.local", 0o600)
+    log("Updated WHOOP_REFRESH_TOKEN in .env.local")
 
 
 # --------------------------------------------------------------------------
@@ -289,7 +310,26 @@ def write_csv(path, series):
 
 # --------------------------------------------------------------------------
 
+def load_env_file(path=".env.local"):
+    """Read KEY=value pairs from .env.local into the environment.
+
+    Keeps credentials out of your shell history and out of the environment of
+    every other command in the session. Absent in CI, where Actions supplies
+    the same variables from repository secrets.
+    """
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def main():
+    load_env_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=365,
                         help="how far back to fetch (default: 365)")
@@ -300,8 +340,9 @@ def main():
     client_secret = os.environ.get("WHOOP_CLIENT_SECRET")
     stored_refresh = os.environ.get("WHOOP_REFRESH_TOKEN")
     if not (client_id and client_secret and stored_refresh):
-        die("WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET and WHOOP_REFRESH_TOKEN "
-            "must all be set.")
+        die("WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET and WHOOP_REFRESH_TOKEN must "
+            "all be set.\n  Locally: run scripts/whoop_auth.py to create "
+            ".env.local.\n  In CI: check the repository secrets.")
 
     access_token, new_refresh = refresh_access_token(
         stored_refresh, client_id, client_secret)
