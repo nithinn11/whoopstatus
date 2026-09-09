@@ -143,25 +143,46 @@ Two ways this goes wrong, both avoidable:
 
 ## Data
 
-`data/whoop.json` is one row per calendar day, joined across the cycle,
-recovery and sleep endpoints:
+The dashboard is built around the three scores WHOOP itself leads with —
+**Sleep, Recovery, Strain** — so `data/whoop.json` groups each day the same
+way, one row per calendar day:
 
-| Field | Notes |
-|---|---|
-| `strain`, `avg_hr`, `max_hr`, `calories` | from `/v2/cycle` |
-| `recovery`, `hrv`, `rhr`, `spo2`, `skin_temp` | from `/v2/recovery` |
-| `sleep_hours`, `sleep_performance`, `sleep_efficiency` | from `/v2/activity/sleep` |
+```json
+{ "date": "2026-06-21",
+  "sleep":    { "performance": 77, "hours": 7.43, "needed": 8.99, "debt": 1.25,
+                "efficiency": 85, "consistency": 65, "light": 4.34, "deep": 1.33,
+                "rem": 1.76, "awake": 1.33, "in_bed": 8.76, "cycles": 8,
+                "disturbances": 15, "respiratory_rate": 16.4,
+                "bedtime": "21:54", "waketime": "06:40",
+                "nap_count": 0, "nap_minutes": null },
+  "recovery": { "score": 47, "hrv": 23.9, "rhr": 75, "spo2": 93.6,
+                "skin_temp": null, "calibrating": true },
+  "strain":   { "score": 7.75, "avg_hr": 85, "max_hr": 143, "calories": 1661 } }
+```
 
-Two shaping details worth knowing:
+Workouts carry `sport`, `strain`, `minutes`, `start`, heart rates, `calories`,
+`distance_km`, `elevation_m`, `percent_recorded`, and `zones` — minutes spent
+in each of WHOOP's six heart-rate zones.
+
+Four shaping details worth knowing:
 
 - **Days are keyed to your local timezone**, not UTC. A cycle starting 04:00Z
   at `-04:00` belongs to the previous local day; keying on the UTC date shifts
   half the chart by one day.
-- **`sleep_hours` is light + SWS + REM.** Summing every field in
-  `stage_summary` also picks up `total_in_bed_time_milli` and reports
-  ~20-hour nights.
+- **`sleep.hours` is light + deep + REM.** `total_in_bed_time_milli` already
+  contains the other stage totals, so summing every field in `stage_summary`
+  double-counts and reports ~20-hour nights.
+- **`sleep.needed`** is `baseline + sleep debt + recent strain − recent nap`,
+  which is the figure WHOOP shows as "you need 8h12m tonight".
+- **Naps are kept, not merged.** The longest non-nap sleep is the night;
+  naps are counted separately in `nap_count` / `nap_minutes`, because they
+  offset the following night's sleep need.
 
-`data/whoop.csv` is the same rows, flat, for spreadsheets.
+Every row exposes the same keys whether or not a night was scored — missing
+values are `null` rather than absent, so consumers never have to guard each
+field individually.
+
+`data/whoop.csv` is the same data flattened to 27 columns for spreadsheets.
 
 ## Troubleshooting
 

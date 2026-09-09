@@ -168,6 +168,22 @@ def paginate(path, token, start_iso, end_iso):
 # --------------------------------------------------------------------------
 # shaping
 # --------------------------------------------------------------------------
+def _shift_iso(iso, offset):
+    """Apply a WHOOP timezone_offset to a UTC timestamp, returning a naive
+    local datetime. WHOOP reports every timestamp in UTC and hands you the
+    wearer's offset separately."""
+    try:
+        ts = datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+    offset = offset or "+00:00"
+    try:
+        sign = -1 if offset[0] == "-" else 1
+        ts += sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+    except (ValueError, IndexError):
+        pass
+    return ts
+
 
 def local_date(record):
     """Calendar date in the wearer's own timezone, not UTC.
@@ -175,20 +191,15 @@ def local_date(record):
     A cycle starting 04:00Z with offset -04:00 belongs to the previous local
     day; keying on the UTC date would shift half the chart by one day.
     """
-    start = record.get("start") or record.get("created_at")
-    if not start:
-        return None
-    try:
-        ts = datetime.strptime(start[:19], "%Y-%m-%dT%H:%M:%S")
-    except ValueError:
-        return None
-    offset = record.get("timezone_offset") or "+00:00"
-    try:
-        sign = -1 if offset[0] == "-" else 1
-        ts += sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
-    except (ValueError, IndexError):
-        pass
-    return ts.date().isoformat()
+    ts = _shift_iso(record.get("start") or record.get("created_at"),
+                    record.get("timezone_offset"))
+    return ts.date().isoformat() if ts else None
+
+
+def local_clock(record, key):
+    """"HH:MM" in the wearer's timezone -- bedtime and wake time."""
+    ts = _shift_iso(record.get(key), record.get("timezone_offset"))
+    return ts.strftime("%H:%M") if ts else None
 
 
 def scored(record):
@@ -199,27 +210,96 @@ def round_or_none(value, digits=1):
     return round(value, digits) if isinstance(value, (int, float)) else None
 
 
+def hours(milli):
+    """Milliseconds -> hours. WHOOP reports every duration in milliseconds."""
+    return round(milli / 3600000.0, 2) if isinstance(milli, (int, float)) and milli else None
+
+
+SLEEP_FIELDS = [
+    "performance", "efficiency", "consistency", "respiratory_rate",
+    "hours", "needed", "debt", "in_bed", "awake", "light", "deep", "rem",
+    "cycles", "disturbances", "bedtime", "waketime",
+]
+
+
+def build_sleep(record, naps):
+    """One night's sleep, plus any naps that landed on the same day.
+
+    `stage_summary` nests differently than it reads: total_in_bed_time already
+    CONTAINS the light/deep/rem/awake totals, so time actually asleep is
+    light + deep + rem. Summing every field double-counts and reports
+    ~20-hour nights.
+    """
+    nap_summary = {
+        "nap_count": len(naps),
+        "nap_minutes": sum(n[0] for n in naps) // 60000 or None,
+    }
+    # A day can have naps but no scored night. Return the SAME keys either
+    # way -- a differently shaped row forces every consumer to guard each
+    # field, and the first one to forget crashes on a missing key.
+    if record is None:
+        blank = dict.fromkeys(SLEEP_FIELDS)
+        blank.update(nap_summary)
+        return blank
+    sc = scored(record)
+    stage = sc.get("stage_summary") or {}
+    need = sc.get("sleep_needed") or {}
+
+    light = stage.get("total_light_sleep_time_milli") or 0
+    deep = stage.get("total_slow_wave_sleep_time_milli") or 0
+    rem = stage.get("total_rem_sleep_time_milli") or 0
+    asleep = light + deep + rem
+
+    baseline = need.get("baseline_milli") or 0
+    debt = need.get("need_from_sleep_debt_milli") or 0
+    strain_need = need.get("need_from_recent_strain_milli") or 0
+    nap_credit = need.get("need_from_recent_nap_milli") or 0
+    needed = baseline + debt + strain_need - nap_credit
+
+    result = {
+        "performance": round_or_none(sc.get("sleep_performance_percentage"), 0),
+        "efficiency": round_or_none(sc.get("sleep_efficiency_percentage"), 0),
+        "consistency": round_or_none(sc.get("sleep_consistency_percentage"), 0),
+        "respiratory_rate": round_or_none(sc.get("respiratory_rate"), 1),
+        "hours": hours(asleep),
+        "needed": hours(needed),
+        "debt": hours(debt),
+        "in_bed": hours(stage.get("total_in_bed_time_milli")),
+        "awake": hours(stage.get("total_awake_time_milli")),
+        "light": hours(light),
+        "deep": hours(deep),
+        "rem": hours(rem),
+        "cycles": stage.get("sleep_cycle_count"),
+        "disturbances": stage.get("disturbance_count"),
+        "bedtime": local_clock(record, "start"),
+        "waketime": local_clock(record, "end"),
+    }
+    result.update(nap_summary)
+    return result
+
+
 def build_series(cycles, recovery, sleep):
-    """Join cycles + recovery + sleep into one row per calendar day."""
+    """Join cycles + recovery + sleep into one row per calendar day, grouped
+    into the three pillars WHOOP itself presents: sleep, recovery, strain."""
     recovery_by_cycle = {r.get("cycle_id"): r for r in recovery}
 
-    # Longest non-nap sleep wins the night; naps would otherwise overwrite it.
-    sleep_by_date = {}
+    # Longest non-nap sleep wins the night; naps are kept separately rather
+    # than discarded, since they offset the next night's sleep need.
+    nights, naps_by_date = {}, {}
     for s in sleep:
-        if s.get("nap"):
-            continue
         date = local_date(s)
         if not date:
             continue
         stage = scored(s).get("stage_summary") or {}
-        asleep = (
-            (stage.get("total_light_sleep_time_milli") or 0)
-            + (stage.get("total_slow_wave_sleep_time_milli") or 0)
-            + (stage.get("total_rem_sleep_time_milli") or 0)
-        )
-        prev = sleep_by_date.get(date)
+        asleep = ((stage.get("total_light_sleep_time_milli") or 0)
+                  + (stage.get("total_slow_wave_sleep_time_milli") or 0)
+                  + (stage.get("total_rem_sleep_time_milli") or 0))
+        if s.get("nap"):
+            naps_by_date.setdefault(date, []).append((asleep, s))
+            continue
+        prev = nights.get(date)
         if prev is None or asleep > prev[0]:
-            sleep_by_date[date] = (asleep, s)
+            nights[date] = (asleep, s)
 
     rows = {}
     for c in cycles:
@@ -236,26 +316,34 @@ def build_series(cycles, recovery, sleep):
             continue
 
         rs = scored(recovery_by_cycle.get(c.get("id")))
-        asleep_ms, sleep_rec = sleep_by_date.get(date, (0, None))
-        ss = scored(sleep_rec)
-
+        night = nights.get(date)
         rows[date] = {
             "date": date,
-            "strain": round_or_none(strain, 2),
-            "avg_hr": cs.get("average_heart_rate"),
-            "max_hr": cs.get("max_heart_rate"),
-            "calories": round(cs["kilojoule"] / 4.184) if cs.get("kilojoule") else None,
-            "recovery": round_or_none(rs.get("recovery_score"), 0),
-            "hrv": round_or_none(rs.get("hrv_rmssd_milli"), 1),
-            "rhr": rs.get("resting_heart_rate"),
-            "spo2": round_or_none(rs.get("spo2_percentage"), 1),
-            "skin_temp": round_or_none(rs.get("skin_temp_celsius"), 1),
-            "sleep_hours": round(asleep_ms / 3600000.0, 2) if asleep_ms else None,
-            "sleep_performance": round_or_none(ss.get("sleep_performance_percentage"), 0),
-            "sleep_efficiency": round_or_none(ss.get("sleep_efficiency_percentage"), 0),
-            "sleep_consistency": round_or_none(ss.get("sleep_consistency_percentage"), 0),
+            "sleep": build_sleep(night[1] if night else None,
+                                 naps_by_date.get(date, [])),
+            "recovery": {
+                "score": round_or_none(rs.get("recovery_score"), 0),
+                "hrv": round_or_none(rs.get("hrv_rmssd_milli"), 1),
+                "rhr": rs.get("resting_heart_rate"),
+                "spo2": round_or_none(rs.get("spo2_percentage"), 1),
+                "skin_temp": round_or_none(rs.get("skin_temp_celsius"), 1),
+                "calibrating": bool(rs.get("user_calibrating")),
+            },
+            "strain": {
+                "score": round_or_none(strain, 2),
+                "avg_hr": cs.get("average_heart_rate"),
+                "max_hr": cs.get("max_heart_rate"),
+                "calories": round(cs["kilojoule"] / 4.184) if cs.get("kilojoule") else None,
+            },
         }
     return [rows[d] for d in sorted(rows)]
+
+
+# WHOOP's five heart-rate zones, as returned in score.zone_durations.
+ZONE_KEYS = [
+    "zone_zero_milli", "zone_one_milli", "zone_two_milli",
+    "zone_three_milli", "zone_four_milli", "zone_five_milli",
+]
 
 
 def build_workouts(workouts):
@@ -268,34 +356,57 @@ def build_workouts(workouts):
         start, end = w.get("start"), w.get("end")
         minutes = None
         if start and end:
-            try:
-                fmt = "%Y-%m-%dT%H:%M:%S"
-                minutes = round(
-                    (datetime.strptime(end[:19], fmt)
-                     - datetime.strptime(start[:19], fmt)).total_seconds() / 60
-                )
-            except ValueError:
-                pass
+            a, b = _shift_iso(start, None), _shift_iso(end, None)
+            if a and b:
+                minutes = round((b - a).total_seconds() / 60)
+        zones = ws.get("zone_durations") or ws.get("zone_duration") or {}
         out.append({
             "date": local_date(w),
             "sport": w.get("sport_name") or "Activity",
             "strain": round(strain, 1),
             "minutes": minutes,
+            "start": local_clock(w, "start"),
             "avg_hr": ws.get("average_heart_rate"),
             "max_hr": ws.get("max_heart_rate"),
             "calories": round(ws["kilojoule"] / 4.184) if ws.get("kilojoule") else None,
+            "distance_km": round(ws["distance_meter"] / 1000, 2) if ws.get("distance_meter") else None,
+            "elevation_m": round_or_none(ws.get("altitude_gain_meter"), 0),
+            "percent_recorded": round_or_none(ws.get("percent_recorded"), 0),
+            # Minutes per zone, zone 0 (rest) through zone 5 (max).
+            "zones": [round((zones.get(k) or 0) / 60000.0, 1) for k in ZONE_KEYS]
+                     if zones else None,
         })
-    out.sort(key=lambda w: w.get("date") or "", reverse=True)
+    out.sort(key=lambda w: (w.get("date") or "", w.get("start") or ""), reverse=True)
     return out
 
 
+# Flat CSV for spreadsheets: (path into the nested row, column header).
 CSV_COLUMNS = [
-    ("date", "Date"), ("strain", "Strain"), ("recovery", "Recovery %"),
-    ("hrv", "HRV (ms)"), ("rhr", "RHR"), ("sleep_hours", "Sleep (h)"),
-    ("sleep_performance", "Sleep Perf %"), ("sleep_efficiency", "Sleep Eff %"),
-    ("avg_hr", "Avg HR"), ("max_hr", "Max HR"), ("calories", "Calories"),
-    ("spo2", "SpO2 %"), ("skin_temp", "Skin Temp C"),
+    ("date", "Date"),
+    ("sleep.performance", "Sleep Perf %"), ("sleep.hours", "Sleep (h)"),
+    ("sleep.needed", "Sleep Needed (h)"), ("sleep.debt", "Sleep Debt (h)"),
+    ("sleep.efficiency", "Sleep Eff %"), ("sleep.consistency", "Sleep Consistency %"),
+    ("sleep.light", "Light (h)"), ("sleep.deep", "Deep (h)"), ("sleep.rem", "REM (h)"),
+    ("sleep.awake", "Awake (h)"), ("sleep.in_bed", "In Bed (h)"),
+    ("sleep.cycles", "Sleep Cycles"), ("sleep.disturbances", "Disturbances"),
+    ("sleep.respiratory_rate", "Resp Rate"),
+    ("sleep.bedtime", "Bedtime"), ("sleep.waketime", "Wake"),
+    ("sleep.nap_minutes", "Nap (min)"),
+    ("recovery.score", "Recovery %"), ("recovery.hrv", "HRV (ms)"),
+    ("recovery.rhr", "RHR"), ("recovery.spo2", "SpO2 %"),
+    ("recovery.skin_temp", "Skin Temp C"),
+    ("strain.score", "Strain"), ("strain.avg_hr", "Avg HR"),
+    ("strain.max_hr", "Max HR"), ("strain.calories", "Calories"),
 ]
+
+
+def dig(row, path):
+    value = row
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
 
 
 def write_csv(path, series):
@@ -303,7 +414,7 @@ def write_csv(path, series):
         f.write(",".join(label for _, label in CSV_COLUMNS) + "\n")
         for row in series:
             f.write(",".join(
-                "" if row.get(key) is None else str(row[key])
+                "" if dig(row, key) is None else str(dig(row, key))
                 for key, _ in CSV_COLUMNS
             ) + "\n")
 
