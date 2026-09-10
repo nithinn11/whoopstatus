@@ -121,6 +121,24 @@
           <div class="chart"><canvas id="cSleepPct"></canvas></div>
         </div>
       </div>
+      <div class="grid2">
+        <div class="cwrap">
+          <h3>Sleep debt</h3>
+          <p>Hours owed, and how far each night fell short of what you needed.</p>
+          <div class="chart"><canvas id="cDebt"></canvas></div>
+        </div>
+        <div class="cwrap">
+          <h3>Respiratory rate</h3>
+          <p>Normally flat. A sustained rise often shows up before you feel ill.</p>
+          <div class="chart"><canvas id="cResp"></canvas></div>
+        </div>
+      </div>
+      <div class="cwrap">
+        <h3>Sleep timing</h3>
+        <p>Each bar spans lights-out to wake. Ragged edges are what a low
+           consistency score actually looks like.</p>
+        <div class="chart"><canvas id="cTiming"></canvas></div>
+      </div>
     </section>
 
     <!-- ============ RECOVERY ============ -->
@@ -282,6 +300,7 @@ const line = (label, data, color, axis) => ({
 function renderSleep(rows, labels) {
   renderPillar("sSleep", "dSleep", rows, "sleep.performance", { dp: 0, unit: "%" });
   const L = p => latest(rows, p);
+  const napMinutes = rows.reduce((a, r) => a + (dig(r, "sleep.nap_minutes") || 0), 0);
   renderMetrics("mSleep", [
     ["Asleep", hm(L("sleep.hours"))],
     ["Needed", hm(L("sleep.needed"))],
@@ -297,6 +316,8 @@ function renderSleep(rows, labels) {
     ["Resp. rate", fmt(L("sleep.respiratory_rate"), 1), "rpm"],
     ["Bedtime", dig(rows[rows.length - 1], "sleep.bedtime") || "—"],
     ["Wake", dig(rows[rows.length - 1], "sleep.waketime") || "—"],
+    ["Naps", napMinutes ? hm(napMinutes / 60) : "—"],
+    ["In bed", hm(L("sleep.in_bed"))],
   ]);
 
   draw("cStages", {
@@ -314,6 +335,82 @@ function renderSleep(rows, labels) {
         x: Object.assign({ stacked: true }, xAxis()),
         y: Object.assign({ stacked: true, min: 0, ticks: { callback: v => v + "h" } }, AXIS)
       }
+    })
+  });
+
+  // Shortfall = what you needed minus what you got, floored at zero. Shown
+  // alongside the debt WHOOP itself carries forward.
+  const shortfall = rows.map(r => {
+    const need = num(dig(r, "sleep.needed")), got = num(dig(r, "sleep.hours"));
+    return (need === null || got === null) ? null : Math.max(0, +(need - got).toFixed(2));
+  });
+  draw("cDebt", {
+    type: "bar",
+    data: { labels, datasets: [
+      bar("Shortfall", shortfall, CSS("--red")),
+      line("Sleep debt", col(rows, "sleep.debt"), CSS("--yellow")),
+    ] },
+    options: baseOpts({
+      plugins: { legend: { display: true, position: "bottom" },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${hm(c.parsed.y)}` } } },
+      scales: { x: xAxis(),
+        y: Object.assign({ min: 0, ticks: { callback: v => v + "h" } }, AXIS) }
+    })
+  });
+
+  // Respiratory rate barely moves, so an auto-scaled axis would turn noise
+  // into drama. Pin the window around the observed range instead.
+  const resp = col(rows, "sleep.respiratory_rate").filter(v => v !== null);
+  const rMid = resp.length ? resp.reduce((a, b) => a + b, 0) / resp.length : 15;
+  const rPad = Math.max(1.5, ...resp.map(v => Math.abs(v - rMid))) + 0.5;
+  draw("cResp", {
+    type: "line",
+    data: { labels, datasets: [Object.assign(
+      line("Breaths / min", col(rows, "sleep.respiratory_rate"), CSS("--teal")),
+      { backgroundColor: "rgba(45,212,191,.10)", fill: true })] },
+    options: baseOpts({
+      plugins: { tooltip: { callbacks: { label: c => c.parsed.y.toFixed(1) + " rpm" } } },
+      scales: { x: xAxis(),
+        y: Object.assign({ min: +(rMid - rPad).toFixed(1), max: +(rMid + rPad).toFixed(1),
+                           ticks: { callback: v => v.toFixed(1) } }, AXIS) }
+    })
+  });
+
+  // Timing band. Clock times are cyclic, so plot hours since the previous
+  // noon: a 23:10 bedtime is 23.2, a 01:30 one is 25.5, and both sort after
+  // an 8pm night instead of wrapping to the bottom of the axis.
+  const clock = t => {
+    if (!t) return null;
+    const [h, m] = t.split(":").map(Number);
+    return h + m / 60;
+  };
+  const bands = rows.map(r => {
+    let bed = clock(dig(r, "sleep.bedtime")), wake = clock(dig(r, "sleep.waketime"));
+    if (bed === null || wake === null) return null;
+    if (bed < 12) bed += 24;              // after midnight belongs to the night before
+    while (wake < bed) wake += 24;
+    return [bed, wake];
+  });
+  const flat = bands.filter(Boolean).flat();
+  const asClock = v => {
+    const h = Math.floor(((v % 24) + 24) % 24), m = Math.round((v - Math.floor(v)) * 60);
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+  };
+  draw("cTiming", {
+    type: "bar",
+    data: { labels, datasets: [{
+      label: "Asleep", data: bands, backgroundColor: CSS("--purple"),
+      borderRadius: 3, borderSkipped: false
+    }] },
+    options: baseOpts({
+      plugins: { tooltip: { callbacks: {
+        label: c => `${asClock(c.raw[0])} → ${asClock(c.raw[1])} (${hm(c.raw[1] - c.raw[0])})` } } },
+      scales: { x: xAxis(),
+        y: Object.assign({
+          min: flat.length ? Math.floor(Math.min(...flat) - 0.5) : 20,
+          max: flat.length ? Math.ceil(Math.max(...flat) + 0.5) : 32,
+          ticks: { stepSize: 2, callback: asClock }
+        }, AXIS) }
     })
   });
 
