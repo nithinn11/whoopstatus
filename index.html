@@ -10,9 +10,12 @@
   :root{
     --bg:#0a0c10; --panel:#12161d; --panel-2:#171c25; --line:#232a35;
     --fg:#e8edf4; --muted:#8b95a5; --dim:#5b6675;
+    /* The only three hues on the dashboard. Every colour carries the same
+       meaning everywhere: green good, yellow borderline, red poor. Series
+       that share a chart are separated by tint, never by a new hue. */
     --green:#16c47f; --yellow:#f5b73d; --red:#f2545b;
-    --blue:#4a9eff; --purple:#a78bfa; --teal:#2dd4bf;
-    --deep:#6366f1; --rem:#a78bfa; --light:#4a9eff; --awake:#3a4354;
+    --green-60:rgba(22,196,127,.60); --green-30:rgba(22,196,127,.30);
+    --green-fill:rgba(22,196,127,.10);
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
@@ -37,7 +40,7 @@
     padding:6px 14px;border-radius:20px;font-size:13px;font-weight:550;cursor:pointer;
     font-family:inherit;transition:.15s}
   .ranges button:hover{color:var(--fg);border-color:#374151}
-  .ranges button[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:#04241f}
+  .ranges button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#04241f}
 
   /* ---- pillar ---- */
   .pillar{background:var(--panel);border:1px solid var(--line);border-radius:14px;
@@ -78,7 +81,7 @@
 
   footer{margin-top:26px;display:flex;gap:16px;flex-wrap:wrap;color:var(--dim);font-size:13px}
   footer a{color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line)}
-  footer a:hover{color:var(--teal);border-color:var(--teal)}
+  footer a:hover{color:var(--green);border-color:var(--green)}
   .err{padding:40px 4px;color:var(--muted)}
   .err code{background:var(--panel-2);padding:2px 6px;border-radius:4px;color:var(--fg);font-size:13px}
 </style>
@@ -117,9 +120,27 @@
         </div>
         <div class="cwrap">
           <h3>Performance &amp; efficiency</h3>
-          <p>Share of sleep need met, and time asleep while in bed.</p>
+          <p>Share of sleep need met. Green from 85%, yellow 70&ndash;84%, red below.</p>
           <div class="chart"><canvas id="cSleepPct"></canvas></div>
         </div>
+      </div>
+      <div class="grid2">
+        <div class="cwrap">
+          <h3>Sleep debt</h3>
+          <p>Hours owed, and how far each night fell short of what you needed.</p>
+          <div class="chart"><canvas id="cDebt"></canvas></div>
+        </div>
+        <div class="cwrap">
+          <h3>Respiratory rate</h3>
+          <p>Normally flat. A sustained rise often shows up before you feel ill.</p>
+          <div class="chart"><canvas id="cResp"></canvas></div>
+        </div>
+      </div>
+      <div class="cwrap">
+        <h3>Sleep timing</h3>
+        <p>Each bar spans lights-out to wake, coloured by that night's sleep
+           performance. Ragged edges are what a low consistency score looks like.</p>
+        <div class="chart"><canvas id="cTiming"></canvas></div>
       </div>
     </section>
 
@@ -155,7 +176,7 @@
       <div class="metrics" id="mStrain"></div>
       <div class="cwrap">
         <h3>Day strain</h3>
-        <p>Cardiovascular load on WHOOP's 0&ndash;21 logarithmic scale.</p>
+        <p>WHOOP's 0&ndash;21 scale. Green is a light day, yellow moderate from 10, red strenuous from 14.</p>
         <div class="chart"><canvas id="cStrain"></canvas></div>
       </div>
       <div class="cwrap">
@@ -192,8 +213,18 @@ const fmt = (v, d = 0) => v === null ? "—" : (+v).toFixed(d);
 let DATA = null, DAYS = 30;
 const charts = {};
 
-const recColor = v => v === null ? CSS("--dim")
-  : v >= 67 ? CSS("--green") : v >= 34 ? CSS("--yellow") : CSS("--red");
+// One banding rule, three thresholds sets. `hi` and above is green, `lo` to
+// `hi` yellow, below `lo` red.
+const band = (v, lo, hi) => v === null || v === undefined ? CSS("--dim")
+  : v >= hi ? CSS("--green") : v >= lo ? CSS("--yellow") : CSS("--red");
+// WHOOP's own recovery bands.
+const recColor = v => band(v, 34, 67);
+// WHOOP's own sleep-performance bands.
+const sleepColor = v => band(v, 70, 85);
+// Strain inverts the scale: a hard day is taxing, not "good". Bands follow
+// WHOOP's own labels -- light 0-9, moderate 10-13, strenuous 14 and up.
+const strainColor = v => v === null || v === undefined ? CSS("--dim")
+  : v >= 14 ? CSS("--red") : v >= 10 ? CSS("--yellow") : CSS("--green");
 
 // hours -> "7h 26m", the unit WHOOP actually shows
 const hm = v => {
@@ -280,8 +311,9 @@ const line = (label, data, color, axis) => ({
 
 // ---------- pillars ----------
 function renderSleep(rows, labels) {
-  renderPillar("sSleep", "dSleep", rows, "sleep.performance", { dp: 0, unit: "%" });
+  renderPillar("sSleep", "dSleep", rows, "sleep.performance", { dp: 0, unit: "%", color: sleepColor });
   const L = p => latest(rows, p);
+  const napMinutes = rows.reduce((a, r) => a + (dig(r, "sleep.nap_minutes") || 0), 0);
   renderMetrics("mSleep", [
     ["Asleep", hm(L("sleep.hours"))],
     ["Needed", hm(L("sleep.needed"))],
@@ -297,14 +329,16 @@ function renderSleep(rows, labels) {
     ["Resp. rate", fmt(L("sleep.respiratory_rate"), 1), "rpm"],
     ["Bedtime", dig(rows[rows.length - 1], "sleep.bedtime") || "—"],
     ["Wake", dig(rows[rows.length - 1], "sleep.waketime") || "—"],
+    ["Naps", napMinutes ? hm(napMinutes / 60) : "—"],
+    ["In bed", hm(L("sleep.in_bed"))],
   ]);
 
   draw("cStages", {
     type: "bar",
     data: { labels, datasets: [
-      bar("Light", col(rows, "sleep.light"), CSS("--light")),
-      bar("Deep", col(rows, "sleep.deep"), CSS("--deep")),
-      bar("REM", col(rows, "sleep.rem"), CSS("--rem")),
+      bar("Light", col(rows, "sleep.light"), CSS("--green-30")),
+      bar("Deep", col(rows, "sleep.deep"), CSS("--green")),
+      bar("REM", col(rows, "sleep.rem"), CSS("--green-60")),
       line("Needed", col(rows, "sleep.needed"), CSS("--yellow")),
     ] },
     options: baseOpts({
@@ -317,11 +351,88 @@ function renderSleep(rows, labels) {
     })
   });
 
+  // Shortfall = what you needed minus what you got, floored at zero. Shown
+  // alongside the debt WHOOP itself carries forward.
+  const shortfall = rows.map(r => {
+    const need = num(dig(r, "sleep.needed")), got = num(dig(r, "sleep.hours"));
+    return (need === null || got === null) ? null : Math.max(0, +(need - got).toFixed(2));
+  });
+  draw("cDebt", {
+    type: "bar",
+    data: { labels, datasets: [
+      bar("Shortfall", shortfall, CSS("--red")),
+      line("Sleep debt", col(rows, "sleep.debt"), CSS("--yellow")),
+    ] },
+    options: baseOpts({
+      plugins: { legend: { display: true, position: "bottom" },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${hm(c.parsed.y)}` } } },
+      scales: { x: xAxis(),
+        y: Object.assign({ min: 0, ticks: { callback: v => v + "h" } }, AXIS) }
+    })
+  });
+
+  // Respiratory rate barely moves, so an auto-scaled axis would turn noise
+  // into drama. Pin the window around the observed range instead.
+  const resp = col(rows, "sleep.respiratory_rate").filter(v => v !== null);
+  const rMid = resp.length ? resp.reduce((a, b) => a + b, 0) / resp.length : 15;
+  const rPad = Math.max(1.5, ...resp.map(v => Math.abs(v - rMid))) + 0.5;
+  draw("cResp", {
+    type: "line",
+    data: { labels, datasets: [Object.assign(
+      line("Breaths / min", col(rows, "sleep.respiratory_rate"), CSS("--green")),
+      { backgroundColor: CSS("--green-fill"), fill: true })] },
+    options: baseOpts({
+      plugins: { tooltip: { callbacks: { label: c => c.parsed.y.toFixed(1) + " rpm" } } },
+      scales: { x: xAxis(),
+        y: Object.assign({ min: +(rMid - rPad).toFixed(1), max: +(rMid + rPad).toFixed(1),
+                           ticks: { callback: v => v.toFixed(1) } }, AXIS) }
+    })
+  });
+
+  // Timing band. Clock times are cyclic, so plot hours since the previous
+  // noon: a 23:10 bedtime is 23.2, a 01:30 one is 25.5, and both sort after
+  // an 8pm night instead of wrapping to the bottom of the axis.
+  const clock = t => {
+    if (!t) return null;
+    const [h, m] = t.split(":").map(Number);
+    return h + m / 60;
+  };
+  const bands = rows.map(r => {
+    let bed = clock(dig(r, "sleep.bedtime")), wake = clock(dig(r, "sleep.waketime"));
+    if (bed === null || wake === null) return null;
+    if (bed < 12) bed += 24;              // after midnight belongs to the night before
+    while (wake < bed) wake += 24;
+    return [bed, wake];
+  });
+  const flat = bands.filter(Boolean).flat();
+  const asClock = v => {
+    const h = Math.floor(((v % 24) + 24) % 24), m = Math.round((v - Math.floor(v)) * 60);
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+  };
+  draw("cTiming", {
+    type: "bar",
+    data: { labels, datasets: [{
+      label: "Asleep", data: bands,
+      backgroundColor: col(rows, "sleep.performance").map(sleepColor),
+      borderRadius: 3, borderSkipped: false
+    }] },
+    options: baseOpts({
+      plugins: { tooltip: { callbacks: {
+        label: c => `${asClock(c.raw[0])} → ${asClock(c.raw[1])} (${hm(c.raw[1] - c.raw[0])})` } } },
+      scales: { x: xAxis(),
+        y: Object.assign({
+          min: flat.length ? Math.floor(Math.min(...flat) - 0.5) : 20,
+          max: flat.length ? Math.ceil(Math.max(...flat) + 0.5) : 32,
+          ticks: { stepSize: 2, callback: asClock }
+        }, AXIS) }
+    })
+  });
+
   draw("cSleepPct", {
     type: "bar",
     data: { labels, datasets: [
-      bar("Performance %", col(rows, "sleep.performance"), CSS("--purple")),
-      line("Efficiency %", col(rows, "sleep.efficiency"), CSS("--teal")),
+      bar("Performance %", col(rows, "sleep.performance"), col(rows, "sleep.performance").map(sleepColor)),
+      line("Efficiency %", col(rows, "sleep.efficiency"), CSS("--yellow")),
     ] },
     options: baseOpts({
       plugins: { legend: { display: true, position: "bottom" } },
@@ -356,9 +467,9 @@ function renderRecovery(rows, labels) {
   draw("cHrv", {
     type: "line",
     data: { labels, datasets: [
-      Object.assign(line("HRV (ms)", col(rows, "recovery.hrv"), CSS("--teal")),
-        { backgroundColor: "rgba(45,212,191,.12)", fill: true }),
-      line("RHR (bpm)", col(rows, "recovery.rhr"), CSS("--purple"), "y1"),
+      Object.assign(line("HRV (ms)", col(rows, "recovery.hrv"), CSS("--green")),
+        { backgroundColor: CSS("--green-fill"), fill: true }),
+      line("RHR (bpm)", col(rows, "recovery.rhr"), CSS("--yellow"), "y1"),
     ] },
     options: baseOpts({
       plugins: { legend: { display: true, position: "bottom" } },
@@ -369,7 +480,7 @@ function renderRecovery(rows, labels) {
 }
 
 function renderStrain(rows, labels) {
-  renderPillar("sStrain", "dStrain", rows, "strain.score", { dp: 1 });
+  renderPillar("sStrain", "dStrain", rows, "strain.score", { dp: 1, color: strainColor });
   const L = p => latest(rows, p);
   const from = rows.length ? rows[0].date : "0000-00-00";
   const wo = (DATA.workouts || []).filter(w => w.date && w.date >= from);
@@ -386,7 +497,8 @@ function renderStrain(rows, labels) {
 
   draw("cStrain", {
     type: "bar",
-    data: { labels, datasets: [bar("Strain", col(rows, "strain.score"), CSS("--blue"))] },
+    data: { labels, datasets: [bar("Strain", col(rows, "strain.score"),
+      col(rows, "strain.score").map(strainColor))] },
     options: baseOpts({ scales: { x: xAxis(),
       y: Object.assign({ min: 0, suggestedMax: 21 }, AXIS) } })
   });
