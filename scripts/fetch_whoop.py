@@ -278,6 +278,12 @@ def build_sleep(record, naps):
     return result
 
 
+# Below this, a cycle is an artefact rather than a day: a strap put on at
+# midday, or a cycle that never really recorded. Even a day spent entirely in
+# bed clears 1.0, so this drops incomplete cycles without discarding genuine
+# rest days -- which is why it is not set higher.
+MIN_STRAIN = 0.5
+
 def build_series(cycles, recovery, sleep):
     """Join cycles + recovery + sleep into one row per calendar day, grouped
     into the three pillars WHOOP itself presents: sleep, recovery, strain."""
@@ -310,7 +316,7 @@ def build_series(cycles, recovery, sleep):
         strain = cs.get("strain")
         # An unscored or still-open cycle reports strain 0 with no heart rate.
         # Charting those puts a fake trough at today's date every morning.
-        if not isinstance(strain, (int, float)) or strain <= 0:
+        if not isinstance(strain, (int, float)) or strain < MIN_STRAIN:
             continue
         if not cs.get("average_heart_rate"):
             continue

@@ -15,6 +15,7 @@
        that share a chart are separated by tint, never by a new hue. */
     --green:#16c47f; --yellow:#f5b73d; --red:#f2545b;
     --green-60:rgba(22,196,127,.60); --green-30:rgba(22,196,127,.30);
+    --red-60:rgba(242,84,91,.60);
     --green-fill:rgba(22,196,127,.10);
   }
   *{box-sizing:border-box}
@@ -179,17 +180,16 @@
         <p>WHOOP's 0&ndash;21 scale. Green is a light day, yellow moderate from 10, red strenuous from 14.</p>
         <div class="chart"><canvas id="cStrain"></canvas></div>
       </div>
+      <div class="cwrap" id="zoneWrap">
+        <h3>Heart-rate zones</h3>
+        <p>Minutes per zone, stacked by day. Green is easy effort, red is
+           near-maximal.</p>
+        <div class="chart"><canvas id="cZones"></canvas></div>
+      </div>
       <div class="cwrap">
         <h3>Workouts</h3>
         <p id="woCount"></p>
-        <div class="tblwrap"><table>
-          <thead><tr>
-            <th>Date</th><th>Activity</th><th class="num">Strain</th><th class="num">Min</th>
-            <th class="num">Avg HR</th><th class="num">Max HR</th><th class="num">Cal</th>
-            <th class="num">Km</th>
-          </tr></thead>
-          <tbody id="woBody"></tbody>
-        </table></div>
+        <div class="tblwrap" id="woTable"></div>
       </div>
     </section>
 
@@ -479,12 +479,22 @@ function renderRecovery(rows, labels) {
   });
 }
 
+// WHOOP's six heart-rate zones, easy to near-maximal. Six steps drawn from
+// the three-colour palette by tint, so the ramp still reads green -> red.
+const ZONE_LABELS = ["Zone 0", "Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+const ZONE_VARS = ["--green-30", "--green-60", "--green", "--yellow", "--red-60", "--red"];
+// Zone 3 and above is the part of training that actually drives adaptation.
+const HARD_ZONE = 3;
+
 function renderStrain(rows, labels) {
   renderPillar("sStrain", "dStrain", rows, "strain.score", { dp: 1, color: strainColor });
   const L = p => latest(rows, p);
   const from = rows.length ? rows[0].date : "0000-00-00";
   const wo = (DATA.workouts || []).filter(w => w.date && w.date >= from);
   const woMin = wo.reduce((a, w) => a + (w.minutes || 0), 0);
+  const zoneMin = i => wo.reduce((a, w) => a + ((w.zones && w.zones[i]) || 0), 0);
+  const hardMin = ZONE_LABELS.reduce((a, _, i) => a + (i >= HARD_ZONE ? zoneMin(i) : 0), 0);
+
   renderMetrics("mStrain", [
     ["Calories", fmt(L("strain.calories")), "kcal"],
     ["Average HR", fmt(L("strain.avg_hr")), "bpm"],
@@ -492,7 +502,8 @@ function renderStrain(rows, labels) {
     ["Peak strain", fmt(Math.max(...col(rows, "strain.score").filter(x => x !== null)), 1)],
     ["Avg strain", fmt(mean(rows, "strain.score"), 1)],
     ["Workouts", String(wo.length)],
-    ["Training time", hm(woMin / 60)],
+    ["Training time", woMin ? hm(woMin / 60) : "—"],
+    ["Zone 3+ time", hardMin ? hm(hardMin / 60) : "—"],
   ]);
 
   draw("cStrain", {
@@ -503,17 +514,68 @@ function renderStrain(rows, labels) {
       y: Object.assign({ min: 0, suggestedMax: 21 }, AXIS) } })
   });
 
+  // Minutes per zone per day, so the shape of training over the window is
+  // visible rather than just its total.
+  const byDate = {};
+  wo.forEach(w => {
+    if (!w.zones) return;
+    (byDate[w.date] = byDate[w.date] || Array(6).fill(0))
+      .forEach((_, i) => byDate[w.date][i] += w.zones[i] || 0);
+  });
+  const hasZones = Object.keys(byDate).length > 0;
+  $("zoneWrap").hidden = !hasZones;
+  if (hasZones) {
+    draw("cZones", {
+      type: "bar",
+      data: { labels, datasets: ZONE_LABELS.map((label, i) =>
+        bar(label, rows.map(r => (byDate[r.date] || [])[i] || null), CSS(ZONE_VARS[i]))) },
+      options: baseOpts({
+        plugins: { legend: { display: true, position: "bottom" },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(1)} min` } } },
+        scales: {
+          x: Object.assign({ stacked: true }, xAxis()),
+          y: Object.assign({ stacked: true, min: 0, ticks: { callback: v => v + "m" } }, AXIS)
+        }
+      })
+    });
+  }
+
+  renderWorkoutTable(wo);
+}
+
+function renderWorkoutTable(wo) {
   $("woCount").textContent = wo.length
     ? `${wo.length} session${wo.length === 1 ? "" : "s"} in this window, most recent first.`
     : "No workouts in this window.";
+  if (!wo.length) { $("woTable").innerHTML = ""; return; }
+
   const cell = v => (v === null || v === undefined) ? "—" : v;
-  const title = s => s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  $("woBody").innerHTML = wo.slice(0, 30).map(w => `<tr>
-    <td>${w.date || "—"}</td><td>${title(w.sport || "Activity")}</td>
-    <td class="num">${w.strain != null ? w.strain.toFixed(1) : "—"}</td>
-    <td class="num">${cell(w.minutes)}</td><td class="num">${cell(w.avg_hr)}</td>
-    <td class="num">${cell(w.max_hr)}</td><td class="num">${cell(w.calories)}</td>
-    <td class="num">${cell(w.distance_km)}</td></tr>`).join("");
+  const title = t => t.replace(/[_-]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  // Distance and elevation only exist for some sports -- a column of dashes
+  // is worse than no column, so include them only when something fills them.
+  const some = k => wo.some(w => w[k] !== null && w[k] !== undefined);
+  const cols = [
+    ["Date", w => w.date || "—", false],
+    ["Start", w => w.start || "—", false],
+    ["Activity", w => title(w.sport || "Activity"), false],
+    ["Strain", w => w.strain != null ? w.strain.toFixed(1) : "—", true],
+    ["Min", w => cell(w.minutes), true],
+    ["Avg HR", w => cell(w.avg_hr), true],
+    ["Max HR", w => cell(w.max_hr), true],
+    ["Cal", w => cell(w.calories), true],
+    some("distance_km") ? ["Km", w => cell(w.distance_km), true] : null,
+    some("elevation_m") ? ["Elev m", w => cell(w.elevation_m), true] : null,
+    ["Zone 3+", w => w.zones
+      ? (w.zones.slice(HARD_ZONE).reduce((a, b) => a + b, 0)).toFixed(1) : "—", true],
+  ].filter(Boolean);
+
+  $("woTable").innerHTML = `<table><thead><tr>${
+    cols.map(([h, , n]) => `<th class="${n ? "num" : ""}">${h}</th>`).join("")
+  }</tr></thead><tbody>${
+    wo.slice(0, 30).map(w => `<tr>${
+      cols.map(([, get, n]) => `<td class="${n ? "num" : ""}">${get(w)}</td>`).join("")
+    }</tr>`).join("")
+  }</tbody></table>`;
 }
 
 function renderAll() {
